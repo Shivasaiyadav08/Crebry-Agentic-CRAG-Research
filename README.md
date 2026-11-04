@@ -1,6 +1,19 @@
-# Crebry — AI Research Workspace
+# Crebry — Agentic CRAG Research Workspace
 
 Crebry helps you research uploaded documents and web sources. Ask a question, follow the research steps, and read an answer with citations you can inspect.
+
+It uses **agentic Corrective Retrieval-Augmented Generation (CRAG)**: it finds evidence, checks whether that evidence answers your question, and chooses a correction when an answer needs more work.
+
+## Why it is agentic CRAG
+
+| Part | What it means in Crebry |
+|---|---|
+| Retrieval | Finds passages from your workspace that relate to your question. |
+| Corrective RAG | Judges the evidence as correct, ambiguous, or incorrect, then uses it, adds web evidence, or replaces unsuitable results. |
+| Agentic recovery | After an answer fails validation, an AI planner chooses whether to rewrite it, retrieve better documents, search the web, or stop. |
+| Grounding | Checks citations and supporting evidence before accepting the answer. |
+
+The planner chooses from available actions within retry and tool limits. Web research needs a configured Tavily key. If the evidence remains insufficient, Crebry explains the gap. These checks help keep answers supported by sources, but do not guarantee factual accuracy.
 
 ## Using Crebry
 
@@ -10,7 +23,7 @@ Crebry helps you research uploaded documents and web sources. Ask a question, fo
 4. Crebry checks your documents and searches the web when more evidence is needed and web search is configured.
 5. Read the answer, open its citations, and ask follow-up questions. Conversations are saved in your workspace.
 
-## Project flow
+## How the project works
 
 ### When you upload a document
 
@@ -18,28 +31,36 @@ The backend checks that you own the workspace, extracts the text, and divides it
 
 Gemini turns each passage into an embedding: a list of numbers used to find passages with similar meaning. In the hosted setup, Supabase stores these searchable passages, document details, and the original file.
 
-### When you ask a question
+### Research workflow
 
 ```mermaid
 flowchart TD
-    Question[Ask a question] --> Retrieve[Find relevant document passages]
-    Retrieve --> Grade[Score relevance and check coverage]
-    Grade --> Decision{Is the evidence strong and complete?}
-    Decision -->|Yes| Refine[Select useful source sentences]
-    Decision -->|No| Search[Focus the query and search the web]
+    Question[Ask a question] --> Retrieve[Retrieve document passages]
+    Retrieve --> Evaluate[Score relevance and check coverage]
+    Evaluate --> Verdict{CRAG evidence verdict}
+    Verdict -->|CORRECT: use documents| Refine[Keep useful source passages]
+    Verdict -->|AMBIGUOUS: keep useful documents| Rewrite[Prepare a focused web query]
+    Verdict -->|INCORRECT: discard unsuitable documents| Rewrite
+    Rewrite --> Search[Search the web when available]
     Search --> Refine
-    Refine --> Generate[Generate an answer with citations]
-    Generate --> Validate[Check citations and supporting evidence]
-    Validate -->|Pass| Save[Save and display the final answer]
-    Validate -->|Fail| Correct[Choose a correction or stop]
-    Correct -->|Rewrite the answer| Generate
-    Correct -->|Find better documents| Retrieve
-    Correct -->|Find web evidence| Search
+    Refine --> Generate[Stream a draft with citations]
+    Generate --> Validate{Citations and evidence checks pass?}
+    Validate -->|Yes| Save[Save and display the answer]
+    Validate -->|No: evidence and retry budget remain| Plan{AI planner chooses a correction}
+    Validate -->|No evidence or retries exhausted| Stop[Explain why an answer cannot be supported]
+    Plan -->|Rewrite answer| Generate
+    Plan -->|Retrieve better documents| Retrieve
+    Plan -->|Search for missing evidence| Rewrite
+    Plan -->|Stop| Stop
 ```
 
-LangGraph controls this workflow. It uses Corrective Retrieval-Augmented Generation (**CRAG**) to decide how to handle document evidence:
+The workflow has five main stages:
 
-Relevance scoring and evidence coverage share one AI evaluation. When more evidence is needed, that evaluation can also prepare the web query. The workflow keeps separate progress steps, and uses a separate coverage check when the combined result cannot be trusted or an older saved job needs it.
+1. **Find evidence.** Search the documents in your workspace for passages related to your question.
+2. **Check the evidence.** Judge both relevance and whether the accepted passages cover the question.
+3. **Fill gaps.** Keep useful documents and add web sources, or discard unsuitable documents and try web research.
+4. **Write and check.** Use the selected source passages to produce a cited draft, then check its citations and factual support.
+5. **Accept or correct.** Save an accepted answer. If a draft fails the checks, let the AI planner choose an allowed recovery action while budget remains.
 
 | Verdict | What Crebry does |
 |---|---|
@@ -47,11 +68,19 @@ Relevance scoring and evidence coverage share one AI evaluation. When more evide
 | Ambiguous | Keeps useful document evidence and looks for missing information on the web. |
 | Incorrect | Removes untrustworthy document evidence and tries web sources instead. |
 
-Refinement selects original source sentences. Gemini uses that evidence to write a draft. Citation checks and, when enabled, grounding validation check the draft before publication.
+LangGraph connects these steps and follows the decisions returned by the evaluator and correction planner. Relevance and coverage usually share one Gemini call, which can also prepare a query for missing evidence. Separate coverage and query checks remain available when needed.
 
-If the answer fails validation, a planner can rewrite it, retrieve more documents, search the web, or stop. Retry and tool limits keep this process bounded. When evidence cannot support an answer, Crebry explains the gap rather than publishing unsupported claims.
+Refinement keeps original source sentences and their citation IDs. It is skipped when the evidence is already simple enough. Generation and answer validation remain separate steps.
 
-Citations such as `[D1]` point to uploaded documents; `[W1]` points to a web source. Click a citation to inspect its source. Streaming text is a provisional draft until the checks finish.
+### Understanding your answer
+
+- **Document citations**, such as `[D1]`, point to passages in uploaded files.
+- **Web citations**, such as `[W1]`, point to external sources found during research.
+- **Streaming text** is a provisional draft until the checks finish.
+- **The workflow panel** shows the research steps, evidence decisions, and corrective actions.
+- **Saved conversations** let you return to your research and ask follow-up questions.
+
+Click a citation to inspect its source. For example, if a report explains a topic but does not cover a recent change, Crebry can keep the useful report passages and look for the missing information on the web.
 
 ## How the services connect
 
@@ -76,7 +105,7 @@ Research runs in a saved background job. The frontend receives progress events a
 |---|---|
 | Next.js, React, TypeScript | Pages, chat, document library, and workflow display |
 | FastAPI | Backend API and progress streaming |
-| LangGraph | Research steps, decisions, and correction paths |
+| LangGraph | Agentic CRAG steps, evidence decisions, and correction paths |
 | Gemini | Embeddings, evidence judgments, answer generation, and OCR |
 | Tavily | Web search when document evidence needs help |
 | Clerk | Sign-in and session verification |
