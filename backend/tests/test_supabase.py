@@ -1,4 +1,5 @@
 from unittest.mock import MagicMock
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import pytest
@@ -138,7 +139,10 @@ def test_retrieval_returns_citation_metadata_and_scopes_published_versions(tmp_p
     embedder = MagicMock()
     embedder.embed_query.return_value = [1.0] + [0.0] * 767
     store = PostgresVectorStore(engine, tmp_path, "gemini", embedder)
-    result = store.retrieve("workspace_a", "question")
+    # Retrieval for another workspace must not wait behind an indexing lock.
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with store.lock:
+            result = pool.submit(store.retrieve, "workspace_a", "question").result(timeout=2)
     assert result == [{"id": "D1", "kind": "document", "text": "Evidence from page seven",
                        "similarity": 0.875, "document_id": "doc_a", "name": "paper.pdf",
                        "page": 7, "version": "published", "chunk": 3}]

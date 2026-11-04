@@ -67,20 +67,21 @@ class PostgresVectorStore(VectorStore):
             ORDER BY distance, c.document_id, c.chunk
             LIMIT :count
         """)
-        with self.lock:
-            with self.engine.connect() as connection:
-                present = connection.execute(text("""
+        # Read-only retrieval need not wait behind another workspace's indexing
+        # or network embedding call. The published-version join remains authoritative.
+        with self.engine.connect() as connection:
+            present = connection.execute(text("""
                     SELECT 1 FROM crebry.document_chunks c JOIN crebry.documents d
                       ON d.id = c.document_id AND d.workspace_id = c.workspace_id AND d.index_version = c.version
                     WHERE c.workspace_id = :workspace LIMIT 1
                 """), {"workspace": workspace_id}).scalar()
-            if not present:
-                return []
-            embedding = vector_literal(self.embed_query(question)[0])
-            with self.engine.connect() as connection:
-                rows = connection.execute(statement, {"workspace": workspace_id, "embedding": embedding,
-                    "count": max(1, min(int(count), 100))}).mappings().all()
-            return [
+        if not present:
+            return []
+        embedding = vector_literal(self.embed_query(question)[0])
+        with self.engine.connect() as connection:
+            rows = connection.execute(statement, {"workspace": workspace_id, "embedding": embedding,
+                "count": max(1, min(int(count), 100))}).mappings().all()
+        return [
                 {"id": f"D{i + 1}", "kind": "document", "text": row["content"],
                  "similarity": round(max(0, min(1, 1 - float(row["distance"]))), 4),
                  **{field: row[field] for field in ("document_id", "name", "page", "version", "chunk")}}

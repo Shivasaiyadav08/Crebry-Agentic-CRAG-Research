@@ -23,6 +23,7 @@ node_modules/
 *.tsbuildinfo
 playwright-report/
 test-results/
+frontend/artifacts/
 *.log
 .tmp/
 .test-tmp*/

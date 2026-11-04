@@ -18,11 +18,24 @@ from app.services.ai import (
 
 def test_llm_uses_gemini_developer_api_only(monkeypatch):
     monkeypatch.setattr(config, "gemini_api_key", "test-only")
-    model = create_llm("gemini-3.7-flash")
-    assert model.model == "gemini-3.7-flash"
+    model = create_llm("gemini-3.5-flash-lite")
+    assert model.model == "gemini-3.5-flash-lite"
     assert model.vertexai is False
     assert model.max_retries == 0
     assert model.include_thoughts is False
+
+
+def test_structured_output_budgets_match_the_task(monkeypatch):
+    from app.agents.state import AnswerValidation, CorrectionPlan, EvidenceEvaluation, RewrittenQuery
+    from app.services.ai import structured_output_limit
+
+    monkeypatch.setattr(config, "gemini_structured_max_output_tokens", 2048)
+    assert structured_output_limit(EvidenceEvaluation) == 2048
+    assert structured_output_limit(AnswerValidation) == 1024
+    assert structured_output_limit(CorrectionPlan) == 512
+    assert structured_output_limit(RewrittenQuery) == 512
+    monkeypatch.setattr(config, "gemini_structured_max_output_tokens", 256)
+    assert structured_output_limit(CorrectionPlan) == 256
 
 
 def test_gemini_content_blocks_exclude_thoughts_and_signatures():

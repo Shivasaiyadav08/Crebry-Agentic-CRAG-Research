@@ -34,6 +34,18 @@ class EvidenceSelection(BaseModel):
     keep_ids: list[str] = Field(description="Identifiers of passages relevant to the question")
 
 
+class EvidenceEvaluation(RelevanceBatch):
+    """Grade chunks, then judge coverage using only chunks above the cutoff."""
+
+    assessment: EvidenceAssessment
+    supporting_ids: list[str] = Field(description="Exact accepted chunk IDs supporting the coverage judgment")
+    rewritten_query: str = Field(
+        default="",
+        max_length=500,
+        description="Standalone web query for any evidence gap; preserve the question's intent",
+    )
+
+
 class CorrectionPlan(BaseModel):
     """Allowed adaptive actions after a failed answer validation."""
 
@@ -67,6 +79,7 @@ class GraphState(TypedDict, total=False):
     retrieved: list[dict]
     sources: list[dict]
     assessment: dict
+    evaluated_assessment: dict | None
     rewritten_query: str
     web_search_error: str
     answer: str
@@ -79,6 +92,7 @@ class GraphState(TypedDict, total=False):
     refined_sources: list[dict]
     retrieval_rounds: int
     retrieval_query: str
+    last_retrieval_query: str
     web_attempts: int
     correction_action: str
     correction_query: str

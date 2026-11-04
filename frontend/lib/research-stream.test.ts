@@ -213,7 +213,7 @@ it("does not publish a delayed refresh into another account", async () => {
   await running;
   expect(useResearch.getState().conversations).toEqual([]);
   expect(useResearch.getState().messages).toEqual([]);
-  expect(stream.fetcher).toHaveBeenCalledTimes(2);
+  expect(stream.fetcher).toHaveBeenCalledTimes(3);
 });
 
 it("does not send research without an authenticated session", async () => {
@@ -224,4 +224,33 @@ it("does not send research without an authenticated session", async () => {
     .update({ workspaceId: "workspace", selectedModel: "gemini-test" });
   await sendResearch("Question");
   expect(stream.fetcher).not.toHaveBeenCalled();
+});
+
+it("refreshes the conversation list and saved messages concurrently", async () => {
+  const stream = openStream();
+  const { running } = await start(stream);
+  let resolveList!: (value: Response) => void;
+  let resolveChat!: (value: Response) => void;
+  stream.fetcher
+    .mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveList = resolve;
+        }),
+    )
+    .mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveChat = resolve;
+        }),
+    );
+  stream.emit({ type: "done" });
+  stream.close();
+  await vi.waitFor(() => expect(stream.fetcher).toHaveBeenCalledTimes(3));
+  expect(resolveList).toBeDefined();
+  expect(resolveChat).toBeDefined();
+  resolveList(Response.json([]));
+  resolveChat(Response.json({ messages: [] }));
+  await running;
+  expect(useResearch.getState().error).toBe("");
 });

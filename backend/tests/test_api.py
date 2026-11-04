@@ -3,7 +3,7 @@ import httpx
 import pytest
 
 from app.core.config import config
-from app.agents.state import AnswerValidation, EvidenceAssessment, RelevanceBatch
+from app.agents.state import AnswerValidation, EvidenceEvaluation
 from app.models.database import AppSettings
 from test_graph import mock_ai
 
@@ -20,6 +20,16 @@ def test_health_and_validation(client):
     assert client.post("/api/workspaces", json={"name": "   "}).status_code == 422
     assert client.get("/api/settings").status_code == 404
     assert client.post("/api/chat/stream", json={"workspace_id": "bad", "question": "  "}).status_code == 422
+
+
+def test_model_list_does_not_erase_key_specific_cooldowns(client, monkeypatch):
+    async def models(**_):
+        return [{"id": "gemini-3.1-flash-lite", "available": False, "retry_after_seconds": 40}]
+
+    monkeypatch.setattr("app.api.routes.get_free_models", models)
+    result = client.get("/api/models").json()
+    assert result[0]["available"] is False
+    assert result[0]["retry_after_seconds"] == 40
 
 
 def test_paid_model_is_rejected(client, workspace, monkeypatch):
@@ -113,7 +123,7 @@ def test_catalog_errors_keep_status_without_exposing_credentials(client, workspa
         assert "private-api-key" not in response.text
 
 
-@pytest.mark.parametrize("failure_schema", [RelevanceBatch, EvidenceAssessment, AnswerValidation])
+@pytest.mark.parametrize("failure_schema", [EvidenceEvaluation, AnswerValidation])
 @pytest.mark.parametrize("status", [401, 503])
 def test_ai_service_failure_stops_without_web_search_or_answer_regeneration(
     client, workspace, monkeypatch, failure_schema, status

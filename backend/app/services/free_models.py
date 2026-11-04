@@ -5,8 +5,10 @@ OCR, and frontend. Unknown model prices are never assumed to be free.
 """
 
 import asyncio
+import hashlib
 import logging
 import re
+from datetime import date
 from time import monotonic
 
 import httpx
@@ -18,14 +20,23 @@ logger = logging.getLogger(__name__)
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta"
 PRICING_URL = "https://ai.google.dev/gemini-api/docs/pricing"
 
-# Conservative recovery when Google's public pricing page is unavailable or changes
-# format. Exact IDs only; an authenticated Models.list result is still required.
-# Review against the official pricing page before adding or changing model IDs.
-VERIFIED_FREE_FALLBACK_IDS = frozenset({
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-3.5-flash-lite",
+# Capability-reviewed endpoints, not an assertion of free pricing or key access.
+# Both live Standard pricing AND authenticated Models.list must also agree.
+TEXT_MODEL_IDS = frozenset({
+    "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+    "gemini-3.1-flash-lite", "gemini-3.5-flash-lite",
+    "gemini-3-flash-preview", "gemini-3.1-pro-preview",
 })
+RETIRED_MODEL_IDS = frozenset({
+    "gemini-3-pro-preview", "gemini-3.1-flash-lite-preview",
+    "gemini-2.5-pro-preview-03-25", "gemini-2.5-pro-preview-05-06",
+    "gemini-2.5-pro-preview-06-05", "gemini-2.5-flash-preview-05-20",
+    "gemini-2.5-flash-preview-09-2025", "gemini-2.5-flash-lite-preview-09-2025",
+})
+
+
+class CatalogVerificationError(ValueError):
+    """Safe, actionable catalog error suitable for an API response."""
 
 _catalog: list[dict] = []
 _expires = 0.0
@@ -37,7 +48,19 @@ _cooldown_key = ""
 
 def model_allowed(model_id: str) -> bool:
     """Preserve operator exclusions across catalogs, plans, OCR, and direct calls."""
-    return not re.match(r"^gemini-3\.(?:6|8)-flash(?:$|-)", model_id.removeprefix("models/"))
+    model_id = model_id.removeprefix("models/")
+    # 3.5/3.7 Flash aliases redirect to the operator-excluded 3.6/3.8 families.
+    excluded = re.match(r"^gemini-3\.(?:5|6|7|8)-flash(?:$|-)", model_id) and model_id != "gemini-3.5-flash-lite"
+    retired = model_id in RETIRED_MODEL_IDS or model_id.startswith(("gemini-1.", "gemini-2.0-"))
+    redirected = model_id in {"gemini-2.5-pro", "gemini-2.5-flash"} and date.today() >= date(2026, 12, 1)
+    unsupported = any(part in model_id for part in ("image", "tts", "audio", "live", "transcribe", "robotics", "embedding"))
+    unsupported_preview = ("preview" in model_id or "-exp" in model_id) and model_id not in TEXT_MODEL_IDS
+    return not (excluded or retired or redirected or unsupported or unsupported_preview)
+
+
+def credential_fingerprint():
+    """Identify a credential change without persisting the key in checkpoints."""
+    return hashlib.sha256(config.gemini_api_key.encode()).hexdigest()
 
 
 def reset_key_cooldowns():
@@ -114,7 +137,9 @@ def _markdown_pricing_ids(document: str) -> set[str]:
         if not table:
             continue
         contents = table.group(1)
-        if not re.search(r"(?m)^\s*\*\s*Free Tier\s*$", contents):
+        headers = re.split(r"(?m)^\s*---\s*$", contents, maxsplit=1)[0]
+        columns = re.findall(r"(?m)^\s*\*\s*(.*?)\s*$", headers)
+        if len(columns) < 2 or columns[1] != "Free Tier":
             continue
         # Every row begins with its label, followed by the free-tier cell.
         # Exact cell values are required; $0 and unknown values are not inferred.
@@ -143,21 +168,25 @@ def free_tier_ids(document: str) -> set[str]:
 def _verified_pricing(document: str) -> set[str]:
     try:
         return free_tier_ids(document)
-    except ValueError:
-        logger.warning("Gemini pricing format unrecognized; using reviewed free-tier fallback IDs")
-        return set(VERIFIED_FREE_FALLBACK_IDS)
+    except ValueError as error:
+        raise CatalogVerificationError(
+            "Gemini free-tier pricing could not be verified. Refresh the model list later; no unverified models were selected."
+        ) from error
 
 
 def _pricing_fallback(error: Exception) -> set[str]:
     # No error bodies, URLs containing credentials, or API keys in logs.
-    logger.warning("Gemini pricing page unavailable (%s); using reviewed fallback IDs", type(error).__name__)
-    return set(VERIFIED_FREE_FALLBACK_IDS)
+    logger.warning("Gemini pricing verification unavailable (%s)", type(error).__name__)
+    raise CatalogVerificationError(
+        "Google's pricing page is unavailable. Check backend network access and refresh the model list; free-tier eligibility must be verified."
+    ) from None
 
 
 def is_free_text_model(item: dict, eligible: set[str]) -> bool:
     model_id = str(item.get("name", "")).removeprefix("models/")
     return (
         model_id in eligible
+        and model_id in TEXT_MODEL_IDS
         and model_allowed(model_id)
         and "generateContent" in item.get("supportedGenerationMethods", [])
         and not any(part in model_id for part in ("image", "tts", "audio", "live", "transcribe", "robotics"))
@@ -175,7 +204,7 @@ def model_rank(item: dict):
 
 def supported_parameters(model_id: str) -> list[str]:
     # Only families reviewed with the current streaming/structured/vision setup.
-    if re.match(r"^gemini-(?:2\.5|3(?:\.[15678])?)-(?:pro|flash)", model_id):
+    if model_id in TEXT_MODEL_IDS:
         return ["structured_outputs", "streaming", "vision"]
     return []
 
@@ -213,13 +242,15 @@ def catalog_entry(item: dict) -> dict:
     }
 
 
-def _save_catalog(items: list[dict], eligible: set[str]) -> list[dict]:
+def _save_catalog(items: list[dict], eligible: set[str], key: str) -> list[dict]:
     global _catalog, _expires, _catalog_key
     models = [catalog_entry(item) for item in items if is_free_text_model(item, eligible)]
     models = sorted({model["id"]: model for model in models}.values(), key=model_rank)
     if not models:
-        raise ValueError("No verified free-tier Gemini text models are accessible to this API key.")
-    _catalog, _expires, _catalog_key = models, monotonic() + 300, config.gemini_api_key
+        raise CatalogVerificationError("No compatible, verified free-tier Gemini text models were listed for this API key. Check AI Studio model access and refresh.")
+    if key != config.gemini_api_key:
+        raise CatalogVerificationError("Gemini credentials changed during discovery. Refresh the model list.")
+    _catalog, _expires, _catalog_key = models, monotonic() + 300, key
     return availability(models)
 
 
@@ -229,6 +260,7 @@ def get_free_models_sync() -> list[dict]:
         raise ValueError("Gemini is not configured.")
     if _catalog and _catalog_key == config.gemini_api_key and monotonic() < _expires:
         return availability(_catalog)
+    key = config.gemini_api_key
     deadline, token, seen, items = monotonic() + 30, None, set(), []
     with httpx.Client(timeout=12, follow_redirects=True) as client:
         try:
@@ -243,7 +275,7 @@ def get_free_models_sync() -> list[dict]:
                 raise TimeoutError("Gemini catalog deadline reached.")
             response = client.get(
                 f"{GEMINI_API_URL}/models",
-                headers={"x-goog-api-key": config.gemini_api_key},
+                headers={"x-goog-api-key": key},
                 params={"pageSize": 1000, **({"pageToken": token} if token else {})},
                 timeout=remaining,
             )
@@ -258,21 +290,21 @@ def get_free_models_sync() -> list[dict]:
             seen.add(token)
         else:
             raise ValueError("Gemini model catalog exceeded the page limit.")
-    return _save_catalog(items, eligible)
+    return _save_catalog(items, eligible, key)
 
 
 async def get_free_models(*, refresh: bool = False) -> list[dict]:
     """Discover authenticated models and cache verified eligibility for 5 minutes.
 
-    Pricing-document failures fall back to reviewed IDs only. A failed Models.list
-    request never creates a guessed catalog; the HTTP error is reported to the API.
+    Never guess pricing or key access after verification fails.
     """
     if not config.gemini_api_key:
         raise ValueError("Add GEMINI_API_KEY to backend/.env and restart the backend.")
     async with _catalog_lock:
         if not refresh and _catalog and _catalog_key == config.gemini_api_key and monotonic() < _expires:
             return availability(_catalog)
-        async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
+        key = config.gemini_api_key
+        async with asyncio.timeout(30), httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
             try:
                 pricing = await client.get(PRICING_URL)
                 pricing.raise_for_status()
@@ -285,7 +317,7 @@ async def get_free_models(*, refresh: bool = False) -> list[dict]:
             while True:
                 response = await client.get(
                     f"{GEMINI_API_URL}/models",
-                    headers={"x-goog-api-key": config.gemini_api_key},
+                    headers={"x-goog-api-key": key},
                     params={"pageSize": 1000, **({"pageToken": page_token} if page_token else {})},
                 )
                 response.raise_for_status()
@@ -299,4 +331,4 @@ async def get_free_models(*, refresh: bool = False) -> list[dict]:
                 seen_tokens.add(page_token)
                 if len(seen_tokens) >= 10:
                     raise ValueError("Gemini model catalog exceeded the page limit.")
-        return _save_catalog(items, eligible)
+        return _save_catalog(items, eligible, key)

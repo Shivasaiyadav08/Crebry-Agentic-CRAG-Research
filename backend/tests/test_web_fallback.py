@@ -5,7 +5,7 @@ import pytest
 from langchain_core.messages import AIMessageChunk
 
 from app.agents.graph import build_graph
-from app.agents.state import AnswerValidation, RelevanceBatch, RewrittenQuery
+from app.agents.state import AnswerValidation, EvidenceEvaluation, RewrittenQuery
 from app.core.config import config
 from app.services.ai import WebSearchError, create_llm, search_web, call_with_free_fallback
 from app.services.free_models import is_free_text_model, model_allowed
@@ -73,8 +73,10 @@ async def test_youtube_documents_to_brazil_web_answer_preserves_intent_and_citat
     rewritten = []
 
     async def structured(model, schema, instruction, data):
-        if schema is RelevanceBatch:
+        if schema is EvidenceEvaluation:
             return schema(
+                assessment={"sufficient": False, "reason": "Unrelated", "missing_information": "Football evidence"},
+                supporting_ids=[],
                 grades=[
                     {"id": item["id"], "score": 0, "reason": "YouTube is unrelated to football."}
                     for item in data["chunks"]

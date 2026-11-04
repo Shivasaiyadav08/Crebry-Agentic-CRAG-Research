@@ -5,6 +5,7 @@ can repeat the in-flight node; completed retrieval, evidence and citations survi
 """
 import asyncio
 from contextlib import contextmanager
+from copy import deepcopy
 import json
 import logging
 from time import time
@@ -86,33 +87,50 @@ class JobManager:
                 task.cancel()
                 return
 
-    def append(self, run_id, payload):
-        with write_transaction(self.sessions) as db:
-            job = db.get(ResearchJob, run_id, with_for_update=True)
-            if job is None or job.lease_owner != self.owner:
-                raise RuntimeError("Research job lease was lost.")
-            run = db.get(WorkflowRun, run_id)
+    def _append_events(self, db, run_id, payloads):
+        if not payloads:
+            return
+        # Token batches do not need to load/rewrite the growing trace JSON.
+        run = db.get(WorkflowRun, run_id) if any(p["type"] != "token" for p in payloads) else None
+        sequence = db.scalar(select(func.max(ResearchEvent.sequence)).where(ResearchEvent.run_id == run_id)) or 0
+        trace = []
+        for payload in payloads:
             if payload["type"] == "final":
                 existing = db.scalar(select(Message).where(Message.run_id == run_id, Message.role == "assistant"))
                 if existing is None:
+                    job = db.get(ResearchJob, run_id)
                     if job.replaced_ids:
                         db.execute(delete(Message).where(Message.id.in_(job.replaced_ids), Message.conversation_id == run.conversation_id))
                     existing = Message(conversation_id=run.conversation_id, role="assistant", content=payload["answer"], sources=payload["sources"], run_id=run_id)
                     db.add(existing)
                     db.flush()
                 payload = {**payload, "message": as_dict(existing)}
-            sequence = (db.scalar(select(func.max(ResearchEvent.sequence)).where(ResearchEvent.run_id == run_id)) or 0) + 1
+            sequence += 1
             db.add(ResearchEvent(run_id=run_id, sequence=sequence, payload={**payload, "event_id": sequence}))
             if payload["type"] != "token":
-                run.events = [*run.events, payload]
+                trace.append(payload)
+        if trace:
+            run.events = [*run.events, *trace]
 
-    def checkpoint(self, run_id, snapshot, following):
-        # Round-trip detaches mutable graph objects; no executable serializer.
+    def append(self, run_id, payload):
+        self.append_many(run_id, [payload])
+
+    def append_many(self, run_id, payloads):
         with write_transaction(self.sessions) as db:
             job = db.get(ResearchJob, run_id, with_for_update=True)
-            if job.lease_owner != self.owner:
+            if job is None or job.lease_owner != self.owner:
                 raise RuntimeError("Research job lease was lost.")
-            job.snapshot = json.loads(json.dumps(snapshot))
+            self._append_events(db, run_id, payloads)
+
+    def checkpoint(self, run_id, snapshot, following, payloads=()):
+        # Events and the completed node snapshot commit together. JSON serialization
+        # happens once in SQLAlchemy; deepcopy detaches mutable graph objects.
+        with write_transaction(self.sessions) as db:
+            job = db.get(ResearchJob, run_id, with_for_update=True)
+            if job is None or job.lease_owner != self.owner:
+                raise RuntimeError("Research job lease was lost.")
+            self._append_events(db, run_id, payloads)
+            job.snapshot = deepcopy(snapshot)
             job.next_node = following
 
     def finish(self, run_id, status, error, elapsed):
@@ -128,9 +146,11 @@ class JobManager:
         started, status, error = time(), "failed", None
         heartbeat = asyncio.create_task(self.heartbeat(run_id, asyncio.current_task()))
         buffer, last_flush = "", time()
+        pending = []
+        first_token = True
         with self.sessions() as db:
             job = db.get(ResearchJob, run_id)
-            snapshot = json.loads(json.dumps(job.snapshot))
+            snapshot = deepcopy(job.snapshot)
             snapshot["resume_node"] = job.next_node
             snapshot["model_plan"]["deadline_at"] = job.deadline_at
             run = db.get(WorkflowRun, run_id)
@@ -151,19 +171,28 @@ class JobManager:
                             if update is None:
                                 continue
                             snapshot.update(update)
-                            await asyncio.to_thread(self.checkpoint, run_id, snapshot, next_node(node, snapshot))
+                            await asyncio.to_thread(self.checkpoint, run_id, snapshot, next_node(node, snapshot), pending)
+                            pending = []
                         continue
                     payload = {**part["data"], "elapsed_ms": round((time() - started) * 1000)}
                     if payload["type"] == "token":
                         buffer += payload["text"]
-                        if len(buffer) < 100 and time() - last_flush < 0.2:
+                        if not first_token and len(buffer) < 100 and time() - last_flush < 0.2:
                             continue
                         payload = {**payload, "text": buffer}
                         buffer, last_flush = "", time()
+                        first_token = False
                     elif buffer:
-                        await asyncio.to_thread(self.append, run_id, {"type": "token", "text": buffer})
+                        pending.append({"type": "token", "text": buffer})
                         buffer = ""
-                    await asyncio.to_thread(self.append, run_id, payload)
+                    pending.append(payload)
+                    if payload["type"] == "answer_reset":
+                        first_token = True
+                    # Show running steps and the first token promptly. Other events
+                    # commit in order with the next node checkpoint.
+                    if payload["type"] in {"node_start", "token", "answer_reset", "model_fallback", "final"}:
+                        await asyncio.to_thread(self.append_many, run_id, pending)
+                        pending = []
                     if payload["type"] == "final":
                         status = "completed" if payload["valid"] else "validation_failed"
             if status == "failed":
@@ -179,6 +208,10 @@ class JobManager:
             heartbeat.cancel()
             await asyncio.gather(heartbeat, return_exceptions=True)
             elapsed = round((time() - started) * 1000)
+            if pending or buffer:
+                if buffer:
+                    pending.append({"type": "token", "text": buffer})
+                await asyncio.to_thread(self.append_many, run_id, pending)
             if error and not self.stopping:
                 await asyncio.to_thread(self.append, run_id, {"type": "error", "message": error, "run_id": run_id})
             if status != "queued":

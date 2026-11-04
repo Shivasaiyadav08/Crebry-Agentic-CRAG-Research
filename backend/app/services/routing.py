@@ -73,6 +73,14 @@ class RoutingStore:
 
         def score(model):
             health = state.get(self.health_key(model, task), {})
+            lightweight = task in {"EvidenceEvaluation", "RelevanceBatch", "EvidenceAssessment", "EvidenceSelection", "RewrittenQuery", "CorrectionPlan"}
+            # Prefer observed task latency. An unmeasured Flash/Lite is only a cold-start
+            # prior, never a claimed benchmark; generation/validation retain affinity.
+            latency = health.get("latency_ms") if health.get("successes", 0) else None
+            prior = 0 if "flash-lite" in model else 1 if "flash" in model else 2
+            if lightweight:
+                return (model != selected if selected else False, health.get("failures", 0),
+                        latency is None, latency if latency is not None else prior, model != sticky, models.index(model))
             return (model != selected if selected else False, model != sticky,
                     health.get("failures", 0), health.get("latency_ms", 0), models.index(model))
 
@@ -84,11 +92,19 @@ class RoutingStore:
                    state.get(f"{task}:{model}", {}).get("until", 0)) <= now
 
     def availability(self, model, task):
+        return self.availability_many([model], task)[model]
+
+    def availability_many(self, models, task):
+        """One ledger read for the entire catalog, without per-model round trips."""
         with self.sessions() as db:
             state = db.get(RoutingState, self.project).payload
-        remaining = max(0, ceil(max(state.get(f"blocked:{model}", 0),
-                                  state.get(self.health_key(model, task), {}).get("until", 0)) - time()))
-        return {"available": remaining == 0, "retry_after_seconds": remaining}
+        now = time()
+        result = {}
+        for model in models:
+            remaining = max(0, ceil(max(state.get(f"blocked:{model}", 0),
+                                      state.get(self.health_key(model, task), {}).get("until", 0)) - now))
+            result[model] = {"available": remaining == 0, "retry_after_seconds": remaining}
+        return result
 
     def reserve(self, model, task, tokens, ttl, lease=None):
         """Atomically reserve project-wide concurrency and per-model free budgets.
@@ -171,6 +187,22 @@ async def execute_fallback(plan, operation, notify, *, store=None, task="generat
     from app.services.ai import ModelFallbackExhausted, is_model_unavailable, retryable_model_error, safe_service_error, service_status
     from app.services.free_models import mark_model_available, mark_model_unavailable, model_availability, model_allowed
 
+    # A persisted job may outlive its verified catalog or use a replaced key.
+    # Revalidate rather than assuming a former credential's access or pricing.
+    if plan.get("credential_fingerprint"):
+        from app.services.free_models import credential_fingerprint, get_free_models
+        if (plan["credential_fingerprint"] != credential_fingerprint()
+                or time() - plan.get("catalog_verified_at", 0) >= 300):
+            changed_key = plan["credential_fingerprint"] != credential_fingerprint()
+            fresh = await get_free_models()
+            plan["catalog"] = fresh
+            plan["models"] = [item["id"] for item in fresh]
+            plan["credential_fingerprint"] = credential_fingerprint()
+            plan["catalog_verified_at"] = time()
+            if changed_key:
+                plan["unavailable"] = []
+                plan["failure_reasons"] = {}
+
     candidates = [model for model in dict.fromkeys(plan["models"]) if model_allowed(model)]
     catalog = plan.get("catalog")
     if catalog is not None:
@@ -210,7 +242,7 @@ async def execute_fallback(plan, operation, notify, *, store=None, task="generat
         pending = candidates if round_number == 0 else retries[:config.gemini_max_model_attempts]
         retries = []
         if round_number and pending:
-            delay = min(2 ** round_number + random.uniform(0, 0.25), max(0, deadline - monotonic()))
+            delay = min(0.25 * 2 ** (round_number - 1) + random.uniform(0, 0.1), max(0, deadline - monotonic()))
             await asyncio.sleep(delay)
         for index, model in enumerate(pending):
             remaining = deadline - monotonic()
