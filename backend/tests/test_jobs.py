@@ -2,7 +2,7 @@ import json
 
 from sqlalchemy import func, select
 
-from app.agents.state import EvidenceAssessment
+from app.agents.state import EvidenceEvaluation
 from app.core.config import config
 from app.models.database import Message, ResearchJob, WorkflowRun
 from test_api import mock_ai, upload
@@ -26,7 +26,7 @@ def test_idempotency_replays_same_job_and_preserves_messages(client, workspace, 
     assert client.post("/api/chat/stream", json={**body, "question": "Different input"}).status_code == 409
 
 
-def test_retry_resumes_after_grading_without_repeating_retrieval(client, workspace, monkeypatch):
+def test_retry_resumes_at_evaluation_without_repeating_retrieval(client, workspace, monkeypatch):
     import app.agents.nodes as nodes
 
     monkeypatch.setattr(config, "gemini_api_key", "test-only")
@@ -44,7 +44,7 @@ def test_retry_resumes_after_grading_without_repeating_retrieval(client, workspa
     failing = True
 
     async def assessment(model, schema, instruction, data):
-        if failing and schema is EvidenceAssessment:
+        if failing and schema is EvidenceEvaluation:
             error = RuntimeError("private-provider-body")
             error.code = 503
             raise error
@@ -55,14 +55,14 @@ def test_retry_resumes_after_grading_without_repeating_retrieval(client, workspa
     run_id, conversation_id = events[0]["run_id"], events[0]["conversation_id"]
     with client.app.state.db() as db:
         saved = db.get(ResearchJob, run_id)
-        assert saved.next_node == "assess"
-        assert saved.snapshot["sources"][0]["id"] == "D1"
+        assert saved.next_node == "grade"
+        assert saved.snapshot["retrieved"][0]["id"] == "D1"
         assert saved.status == "failed"
     failing = False
     # Advance task circuit recovery without waiting for wall-clock cooldown.
     with client.app.state.routing.transaction() as (_, state):
         for key in list(state):
-            if key.startswith("EvidenceAssessment:"):
+            if key.startswith("EvidenceEvaluation:"):
                 state[key] = {**state[key], "until": 0}
     root = f"/api/workspaces/{workspace}/workflows/{run_id}"
     cursor = events[-1]["event_id"]

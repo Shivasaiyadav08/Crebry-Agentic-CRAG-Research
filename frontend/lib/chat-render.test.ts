@@ -12,10 +12,11 @@ vi.mock("@/stores/research", () => ({
     { getState: () => context.state },
   ),
 }));
-vi.mock("@/hooks/use-chat", () => ({
-  useChat: () => ({ send: vi.fn(), stop: vi.fn() }),
+vi.mock("@/lib/research-stream", () => ({
+  recoverResearch: vi.fn(),
+  sendResearch: vi.fn(),
+  stopResearch: vi.fn(),
 }));
-vi.mock("@/lib/research-stream", () => ({ recoverResearch: vi.fn() }));
 
 beforeEach(() => {
   context.state = {

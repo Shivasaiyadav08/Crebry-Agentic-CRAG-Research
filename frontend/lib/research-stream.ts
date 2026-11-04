@@ -251,13 +251,15 @@ export async function sendResearch(question: string, regenerate = false) {
       useResearch.getState().update({ streaming: false });
       if (receivedStart) {
         try {
-          const conversations = await api<Conversation[]>(
-            `/workspaces/${state.workspaceId}/conversations`,
-          );
-          if (isCurrent()) {
-            const chat = await api<{ messages: Message[] }>(
+          const [conversations, chat] = await Promise.all([
+            api<Conversation[]>(
+              `/workspaces/${state.workspaceId}/conversations`,
+            ),
+            api<{ messages: Message[] }>(
               `/workspaces/${state.workspaceId}/conversations/${completedConversationId}`,
-            );
+            ),
+          ]);
+          if (isCurrent()) {
             const current = useResearch.getState();
             if (isCurrent() && current.workspaceId === state.workspaceId) {
               current.update({ conversations });

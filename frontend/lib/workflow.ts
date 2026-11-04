@@ -16,13 +16,14 @@ export const workflowSteps = [
   {
     id: "grade",
     title: "Grade relevance",
-    subtitle: "Structured AI judgment",
+    subtitle: "Combined evidence evaluation",
     file: "nodes.py",
     purpose:
-      "Evaluate document chunks against the question, filtering unsupported or unrelated context.",
+      "Score document relevance and assess coverage in one structured AI call. Coverage may use only chunks that pass the relevance cutoff.",
     input: "Question, retrieved chunks, request-scoped relevance threshold.",
-    output: "Validated relevance scores and accepted document evidence.",
-    code: "result = await ask(state, RelevanceBatch, instruction, data)\naccepted = score >= relevance_threshold",
+    output:
+      "Validated relevance scores, accepted documents, and a coverage judgment.",
+    code: "result = await ask(state, EvidenceEvaluation, instruction, data)\naccepted = score >= relevance_threshold",
   },
   {
     id: "assess",
@@ -30,7 +31,7 @@ export const workflowSteps = [
     subtitle: "Correct · Ambiguous · Incorrect",
     file: "nodes.py + graph.py",
     purpose:
-      "Classify graded evidence with 0.3 / 0.7 relevance bands and an evidence-coverage check: strong and sufficient, partial or medium-confidence, or untrustworthy. The verdict determines whether web correction is needed.",
+      "Apply the CRAG bands to the combined evaluation. If its coverage references fail validation or a legacy checkpoint lacks an evaluation, assess the accepted evidence separately. The verdict determines whether web correction is needed.",
     input: "Question, selected documents, evidence coverage assessment.",
     output:
       "CORRECT → refine; AMBIGUOUS → augment via web; INCORRECT → replace with web evidence.",
@@ -42,7 +43,7 @@ export const workflowSteps = [
     subtitle: "Find the evidence gap",
     file: "nodes.py",
     purpose:
-      "Prepare a focused web query without dragging unrelated chat history into standalone questions.",
+      "Use the focused query from the combined evaluation or correction plan when available; otherwise rewrite it separately. Standalone questions keep their original intent.",
     input:
       "Question, missing evidence, relevant history or approved corrective plan.",
     output:

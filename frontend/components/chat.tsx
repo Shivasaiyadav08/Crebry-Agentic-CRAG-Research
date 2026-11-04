@@ -19,7 +19,6 @@ import {
   Telescope,
   UserRound,
 } from "lucide-react";
-import { useChat } from "@/hooks/use-chat";
 import { useSmoothedText } from "@/hooks/use-smoothed-text";
 import { useResearch } from "@/stores/research";
 import { Button } from "@/components/ui/button";
@@ -27,7 +26,11 @@ import type { Source } from "@/types";
 import { FreeModelPicker } from "@/components/free-model-picker";
 import { RelevancePicker } from "@/components/relevance-picker";
 import { BrandMark } from "@/components/brand";
-import { recoverResearch } from "@/lib/research-stream";
+import {
+  recoverResearch,
+  sendResearch as send,
+  stopResearch as stop,
+} from "@/lib/research-stream";
 import { withoutDocumentIntro } from "@/lib/answer-format";
 
 export function Answer({
@@ -135,7 +138,6 @@ export function Chat() {
     runId,
     update,
   } = useResearch();
-  const { send, stop } = useChat();
   const reducedMotion = useReducedMotion();
   const smoothDraft = useSmoothedText(draft, streaming && !reducedMotion);
   const workspace = workspaces.find((item) => item.id === workspaceId);

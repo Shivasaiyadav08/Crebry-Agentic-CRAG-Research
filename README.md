@@ -39,6 +39,8 @@ flowchart TD
 
 LangGraph controls this workflow. It uses Corrective Retrieval-Augmented Generation (**CRAG**) to decide how to handle document evidence:
 
+Relevance scoring and evidence coverage share one AI evaluation. When more evidence is needed, that evaluation can also prepare the web query. The workflow keeps separate progress steps, and uses a separate coverage check when the combined result cannot be trusted or an older saved job needs it.
+
 | Verdict | What Crebry does |
 |---|---|
 | Correct | Uses strong, sufficiently complete document evidence. |

@@ -1,0 +1,195 @@
+{
+  "mode": "mocked_providers_real_sqlite",
+  "runs": 5,
+  "assumptions": "250ms per structured request; two 50ms generated chunks; 10ms web; chars/4 token estimates, not provider usage; no external database/network latency",
+  "scenarios": {
+    "correct": {
+      "total_ms": 945.17,
+      "first_token_ms": 598.66,
+      "llm_requests": 4,
+      "input_token_estimate": 1632,
+      "output_token_estimate": 84,
+      "sqlite_commits": 21,
+      "node_ms": {
+        "retrieve": 0,
+        "grade": 250,
+        "assess": 0,
+        "refine": 258,
+        "generate": 127,
+        "validate": 263,
+        "finalize": 0
+      },
+      "calls": [
+        "EvidenceEvaluation",
+        "EvidenceSelection",
+        "generate",
+        "AnswerValidation"
+      ],
+      "valid": true,
+      "fallbacks": 0,
+      "simulated_retry_fallback_overhead_ms": 0
+    },
+    "ambiguous": {
+      "total_ms": 962.22,
+      "first_token_ms": 616.57,
+      "llm_requests": 4,
+      "input_token_estimate": 1750,
+      "output_token_estimate": 95,
+      "sqlite_commits": 25,
+      "node_ms": {
+        "retrieve": 1,
+        "grade": 257,
+        "assess": 0,
+        "rewrite": 0,
+        "web_search": 0,
+        "refine": 265,
+        "generate": 122,
+        "validate": 262,
+        "finalize": 0
+      },
+      "calls": [
+        "EvidenceEvaluation",
+        "EvidenceSelection",
+        "generate",
+        "AnswerValidation"
+      ],
+      "valid": true,
+      "fallbacks": 0,
+      "simulated_retry_fallback_overhead_ms": 0
+    },
+    "incorrect": {
+      "total_ms": 947.52,
+      "first_token_ms": 616.6,
+      "llm_requests": 4,
+      "input_token_estimate": 1641,
+      "output_token_estimate": 91,
+      "sqlite_commits": 25,
+      "node_ms": {
+        "retrieve": 0,
+        "grade": 256,
+        "assess": 0,
+        "rewrite": 0,
+        "web_search": 0,
+        "refine": 265,
+        "generate": 116,
+        "validate": 246,
+        "finalize": 0
+      },
+      "calls": [
+        "EvidenceEvaluation",
+        "EvidenceSelection",
+        "generate",
+        "AnswerValidation"
+      ],
+      "valid": true,
+      "fallbacks": 0,
+      "simulated_retry_fallback_overhead_ms": 0
+    },
+    "empty": {
+      "total_ms": 57.53,
+      "first_token_ms": 37.94,
+      "llm_requests": 0,
+      "input_token_estimate": 0,
+      "output_token_estimate": 0,
+      "sqlite_commits": 24,
+      "node_ms": {
+        "retrieve": 0,
+        "grade": 0,
+        "assess": 0,
+        "rewrite": 0,
+        "web_search": 0,
+        "refine": 0,
+        "generate": 0,
+        "validate": 0,
+        "finalize": 0
+      },
+      "calls": [],
+      "valid": false,
+      "fallbacks": 0,
+      "simulated_retry_fallback_overhead_ms": 0
+    },
+    "recovery": {
+      "total_ms": 1861.01,
+      "first_token_ms": 610.74,
+      "llm_requests": 8,
+      "input_token_estimate": 3335,
+      "output_token_estimate": 166,
+      "sqlite_commits": 38,
+      "node_ms": {
+        "retrieve": 0,
+        "grade": 523,
+        "assess": 0,
+        "refine": 516,
+        "generate": 239,
+        "validate": 247,
+        "plan_correction": 256,
+        "finalize": 0
+      },
+      "calls": [
+        "EvidenceEvaluation",
+        "EvidenceSelection",
+        "generate",
+        "CorrectionPlan",
+        "EvidenceEvaluation",
+        "EvidenceSelection",
+        "generate",
+        "AnswerValidation"
+      ],
+      "valid": true,
+      "fallbacks": 0,
+      "simulated_retry_fallback_overhead_ms": 0
+    },
+    "atomic": {
+      "total_ms": 688.89,
+      "first_token_ms": 354.72,
+      "llm_requests": 3,
+      "input_token_estimate": 1367,
+      "output_token_estimate": 78,
+      "sqlite_commits": 21,
+      "node_ms": {
+        "retrieve": 0,
+        "grade": 263,
+        "assess": 0,
+        "refine": 0,
+        "generate": 124,
+        "validate": 262,
+        "finalize": 0
+      },
+      "calls": [
+        "EvidenceEvaluation",
+        "generate",
+        "AnswerValidation"
+      ],
+      "valid": true,
+      "fallbacks": 0,
+      "simulated_retry_fallback_overhead_ms": 0
+    },
+    "fallback": {
+      "total_ms": 962.08,
+      "first_token_ms": 612.77,
+      "llm_requests": 5,
+      "input_token_estimate": 2061,
+      "output_token_estimate": 84,
+      "sqlite_commits": 23,
+      "node_ms": {
+        "retrieve": 0,
+        "grade": 265,
+        "assess": 0,
+        "refine": 254,
+        "generate": 125,
+        "validate": 263,
+        "finalize": 0
+      },
+      "calls": [
+        "EvidenceEvaluation",
+        "EvidenceSelection",
+        "generate",
+        "generate",
+        "AnswerValidation"
+      ],
+      "valid": true,
+      "fallbacks": 1,
+      "simulated_retry_fallback_overhead_ms": 10
+    }
+  }
+}

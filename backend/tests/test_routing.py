@@ -145,3 +145,51 @@ async def test_cancellation_releases_shared_lease(ledger):
         await running
     with sessions() as db:
         assert db.get(RoutingState, "google-project").payload["leases"] == {}
+
+
+def test_lightweight_routing_prefers_measured_latency_and_keeps_generation_affinity(ledger):
+    _, store = ledger
+    models = ["gemini-2.5-pro", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite"]
+    assert store.ordered(models, "EvidenceEvaluation")[0] == "gemini-3.1-flash-lite"
+    for model, latency in zip(models, (30, 90, 60)):
+        lease = store.reserve(model, "EvidenceEvaluation", 1, 30)
+        store.finish(lease, model, "EvidenceEvaluation", latency, success=True)
+    assert store.ordered(models, "EvidenceEvaluation")[0] == "gemini-2.5-pro"
+    lease = store.reserve(models[2], "generate", 1, 30)
+    store.finish(lease, models[2], "generate", 60, success=True, conversation_id="conversation")
+    assert store.ordered(models, "generate", "conversation")[0] == models[2]
+
+
+async def test_persisted_plan_revalidates_access_after_key_change(monkeypatch):
+    from app.services import free_models
+
+    monkeypatch.setattr(config, "gemini_api_key", "new-synthetic-key")
+    checked, calls = [], []
+
+    async def catalog():
+        checked.append(True)
+        return [{"id": "gemini-3.1-flash-lite", "free_tier_eligible": True,
+                 "supported_parameters": ["streaming"], "context_length": 1000000, "output_token_limit": 8192}]
+
+    monkeypatch.setattr(free_models, "get_free_models", catalog)
+
+    async def operation(model):
+        calls.append(model)
+        return "Synthetic grounded answer"
+
+    p = {"models": ["old-access"], "credential_fingerprint": "old-fingerprint", "unavailable": []}
+    await call_with_free_fallback(p, operation, lambda *_: None)
+    assert checked == [True]
+    assert calls == ["gemini-3.1-flash-lite"]
+
+
+async def test_retired_model_in_saved_plan_never_receives_a_provider_call():
+    calls = []
+
+    async def operation(model):
+        calls.append(model)
+        return "answer"
+
+    p = {"models": ["gemini-3.1-flash-lite-preview", "gemini-3.1-flash-lite"], "unavailable": []}
+    assert await call_with_free_fallback(p, operation, lambda *_: None) == "answer"
+    assert calls == ["gemini-3.1-flash-lite"]

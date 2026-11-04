@@ -9,6 +9,7 @@ from app.agents.state import (
     AnswerValidation,
     CorrectionPlan,
     EvidenceAssessment,
+    EvidenceEvaluation,
     EvidenceSelection,
     RelevanceBatch,
     RewrittenQuery,
@@ -25,6 +26,14 @@ SETTINGS = {
 
 def mock_ai(monkeypatch, *, score=0.9, sufficient=True, valid=True, answer=None):
     async def structured(model, schema, instruction, data):
+        if schema is EvidenceEvaluation:
+            grades = [{"id": chunk["id"], "score": score, "reason": "Contains supporting facts"}
+                      for chunk in data["chunks"]]
+            supporting = [g["id"] for g in grades if g["score"] >= data["relevance_threshold"]]
+            return schema(grades=grades, supporting_ids=supporting,
+                          assessment={"sufficient": sufficient and bool(supporting),
+                                      "reason": "Evidence coverage checked",
+                                      "missing_information": "" if sufficient else "Recent data"})
         if schema is RelevanceBatch:
             return schema(
                 grades=[
@@ -100,7 +109,7 @@ async def test_grading_batches_all_six_chunks_in_one_model_call(vectors, monkeyp
     calls = []
 
     async def tracked(model, schema, instruction, data):
-        if schema is RelevanceBatch:
+        if schema is EvidenceEvaluation:
             calls.append(data)
         return await original(model, schema, instruction, data)
 
@@ -342,8 +351,10 @@ async def test_invalid_batch_ids_never_accept_unverified_grades(vectors, monkeyp
     original = nodes.structured_call
 
     async def invalid(model, schema, instruction, data):
-        if schema is RelevanceBatch:
-            return schema(grades=[{"id": item, "score": 1, "reason": "Must be rejected"} for item in ids])
+        if schema is EvidenceEvaluation:
+            return schema(grades=[{"id": item, "score": 1, "reason": "Must be rejected"} for item in ids],
+                          assessment={"sufficient": True, "reason": "Untrusted", "missing_information": ""},
+                          supporting_ids=ids)
         return await original(model, schema, instruction, data)
 
     monkeypatch.setattr(nodes, "structured_call", invalid)
@@ -369,8 +380,10 @@ async def test_batch_results_are_matched_by_id_instead_of_response_order(vectors
     original = nodes.structured_call
 
     async def reversed_grades(model, schema, instruction, data):
-        if schema is RelevanceBatch:
+        if schema is EvidenceEvaluation:
             return schema(
+                assessment={"sufficient": True, "reason": "D1 is enough", "missing_information": ""},
+                supporting_ids=["D1"],
                 grades=[
                     {
                         "id": chunk["id"],

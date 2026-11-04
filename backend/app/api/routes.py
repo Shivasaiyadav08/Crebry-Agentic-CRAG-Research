@@ -1,6 +1,6 @@
+import asyncio
 import hashlib
 import json
-import logging
 from pathlib import Path
 import tempfile
 from time import time
@@ -28,12 +28,11 @@ from app.models.database import (
 )
 from app.services import storage
 from app.services.ai import safe_service_error
-from app.services.free_models import get_free_models
+from app.services.free_models import credential_fingerprint, get_free_models
 from app.services.documents import extract_text, index_document, upload_document
 from app.services.jobs import write_transaction
 
 router = APIRouter(prefix="/api", dependencies=[Depends(authorize_request)])
-logger = logging.getLogger(__name__)
 
 
 class WorkspaceInput(BaseModel):
@@ -344,7 +343,11 @@ def delete_document(workspace_id: str, document_id: str, request: Request):
 async def list_models(request: Request, refresh: bool = False):
     try:
         models = await get_free_models(refresh=True) if refresh else await get_free_models()
-        return [{**item, **request.app.state.routing.availability(item["id"], "generate")} for item in models]
+        availability = await asyncio.to_thread(request.app.state.routing.availability_many,
+                                               [item["id"] for item in models], "generate")
+        return [{**item, "available": item.get("available", True) and availability[item["id"]]["available"],
+                 "retry_after_seconds": max(item.get("retry_after_seconds", 0),
+                                            availability[item["id"]]["retry_after_seconds"])} for item in models]
     except Exception as error:
         raise HTTPException(
             503,
@@ -419,10 +422,6 @@ def get_run(workspace_id: str, run_id: str, request: Request):
         if conversation.workspace_id != workspace_id:
             raise HTTPException(404, "Workflow not found in this workspace.")
         return as_dict(row)
-
-
-def sse(payload: dict) -> str:
-    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 async def resolve_chat_models(data: ChatInput, request: Request):
@@ -538,6 +537,7 @@ async def chat_stream(data: ChatInput, request: Request, selection: dict = Depen
             "model_plan": {
                 "models": selection["models"], "unavailable": [], "notice": selection["notice"],
                 "catalog": selection.get("catalog"), "conversation_id": conversation_id,
+                "credential_fingerprint": credential_fingerprint(), "catalog_verified_at": time(),
                 "selected": data.model, "automatic": data.automatic_fallback,
                 "deadline_at": time() + config.research_timeout_seconds,
             },
