@@ -1,3 +1,11 @@
+### Crebry 2.0 — Agentic AI Research System
+
+Designed and implemented a goal-driven AI research architecture using **LangGraph, Google Gemini, RAG, and Tavily**, featuring dynamic tool selection, iterative research planning, evidence evaluation, answer validation, and bounded autonomous execution.
+
+**Tech Stack:** Python, FastAPI, LangGraph, Gemini, Tavily, Next.js, TypeScript.
+
+**GitHub:** https://github.com/Shivasaiyadav08/Crebry-ResearchAgent/tree/crebry-2.0-autonomous-agent
+
 # Crebry — AI Research Workspace
 
 Crebry turns uploaded documents and web evidence into cited research answers. Its corrective retrieval-augmented generation (CRAG) workflow retrieves passages, grades relevance, checks evidence coverage, searches the web when needed, and validates the answer before saving it.
