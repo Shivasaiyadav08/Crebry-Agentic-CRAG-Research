@@ -1,4 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
+import sys
+from types import SimpleNamespace
 import numpy as np
 import pytest
 
@@ -11,6 +14,20 @@ from app.core.memory import (
 )
 from app.services.documents import extract_text
 from app.services.vector import VectorStore
+
+
+@pytest.fixture
+def local_embedding_modules(monkeypatch):
+    """Unit tests use fake embedders and do not need optional PyTorch packages."""
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(
+            set_num_threads=lambda _: None,
+            set_num_interop_threads=lambda _: None,
+            inference_mode=nullcontext,
+        ),
+    )
 
 
 def test_memory_diagnostics_functions():
@@ -37,11 +54,13 @@ def test_health_endpoint_includes_memory_diagnostics(client):
     assert isinstance(data["memory_rss_mb"], (int, float))
 
 
-def test_embedding_model_singleton_and_thread_safe_lazy_loading(tmp_path, monkeypatch):
+def test_embedding_model_singleton_and_thread_safe_lazy_loading(
+    tmp_path, monkeypatch, local_embedding_modules
+):
     import app.services.vector as vector_module
 
     # Reset shared singleton for test
-    vector_module._SHARED_EMBEDDER = None
+    monkeypatch.setattr(vector_module, "_SHARED_EMBEDDER", None)
     monkeypatch.setattr(config, "embedding_provider", "local")
 
     class MockST:
@@ -57,7 +76,7 @@ def test_embedding_model_singleton_and_thread_safe_lazy_loading(tmp_path, monkey
         def encode(self, texts, **kwargs):
             return np.zeros((len(texts), 384), dtype=np.float32)
 
-    monkeypatch.setattr("sentence_transformers.SentenceTransformer", MockST)
+    monkeypatch.setitem(sys.modules, "sentence_transformers", SimpleNamespace(SentenceTransformer=MockST))
 
     store1 = VectorStore(tmp_path / "1", "mock-model")
     store2 = VectorStore(tmp_path / "2", "mock-model")
@@ -79,7 +98,7 @@ def test_embedding_model_singleton_and_thread_safe_lazy_loading(tmp_path, monkey
     assert len(results) == 4
 
 
-def test_bounded_embedding_batches(tmp_path, monkeypatch):
+def test_bounded_embedding_batches(tmp_path, monkeypatch, local_embedding_modules):
     calls = []
 
     class MockBatchST:
@@ -148,7 +167,7 @@ def test_oversized_file_rejected_without_leaks(client, workspace, monkeypatch):
     assert res.status_code == 201
     result = res.json()[0]
     assert "error" in result
-    assert "exceeds 1 MB" in result["error"]
+    assert "exceeds the effective 1 MB upload limit" in result["error"]
 
     # No files leaked in .tmp
     if temp_dir.exists():

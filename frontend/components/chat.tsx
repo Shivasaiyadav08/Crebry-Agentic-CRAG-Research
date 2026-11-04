@@ -146,13 +146,13 @@ export function Chat() {
   const textarea = useRef<HTMLTextAreaElement>(null);
   const empty = messages.length === 0;
   const available = [
-    ...(events.find((event) => event.type === "retrieval")?.sources ?? []),
-    ...(events.find((event) => event.type === "web_sources")?.sources ?? []),
+    ...(events.findLast((event) => event.type === "retrieval")?.sources ?? []),
+    ...(events.findLast((event) => event.type === "web_sources")?.sources ??
+      []),
   ];
   const lastUser = messages.findLast((message) => message.role === "user");
   const activeNode = events
-    .filter((event) => event.type === "node_start")
-    .at(-1)
+    .findLast((event) => event.type === "node_start")
     ?.node?.replaceAll("_", " ");
 
   useEffect(() => {

@@ -74,7 +74,7 @@ export default function Page() {
           <div className="hero-kicker">
             <span className="tiny-rule" />
             <span className="kicker-pulse-dot" />
-            Autonomous research agent
+            Adaptive research agent
           </div>
           <h1 className="hero-motion-title">
             Research
@@ -207,7 +207,7 @@ export default function Page() {
                 n: "02",
                 icon: Globe2,
                 title: "Ask. Explore. Go deeper.",
-                text: "Choose an AI research model and set the minimum document relevance beside it, starting at 50%. Crebry checks whether the accepted evidence covers your question and explores web sources when there is a gap.",
+                text: "Choose an AI research model and set the minimum document relevance, starting at 50%. Crebry classifies evidence as correct, ambiguous, or incorrect; refines useful passages and corrects gaps with web research when available.",
               },
               {
                 n: "03",

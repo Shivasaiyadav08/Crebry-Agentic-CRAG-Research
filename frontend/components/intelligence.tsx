@@ -27,21 +27,27 @@ import {
 export function Intelligence() {
   const [workflowOpen, setWorkflowOpen] = useState(false);
   const { events, streaming, elapsedMs, update } = useResearch();
-  const retrieved =
-    events.find((event) => event.type === "retrieval")?.sources ?? [];
+  const latestRetrievalIndex = events.findLastIndex(
+    (event) => event.type === "retrieval",
+  );
+  const retrieved = events[latestRetrievalIndex]?.sources ?? [];
   const graded = events
+    .slice(latestRetrievalIndex + 1)
     .filter((event) => event.type === "grade")
     .map((event) => event.source!);
-  const usedThreshold = events.find(
+  const usedThreshold = events.findLast(
     (event) => event.type === "node_end" && event.node === "grade",
   )?.details?.threshold;
   const web =
-    events.find((event) => event.type === "web_sources")?.sources ?? [];
-  const decision = events.find((event) => event.type === "decision");
-  const rewritten = events.find((event) => event.type === "rewrite")?.query;
-  const latestNode = events
-    .filter((event) => event.type === "node_start")
-    .at(-1)?.node;
+    events.findLast((event) => event.type === "web_sources")?.sources ?? [];
+  const decision = events.findLast((event) => event.type === "decision");
+  const correction = events.findLast(
+    (event) => event.type === "correction_plan",
+  );
+  const rewritten = events.findLast((event) => event.type === "rewrite")?.query;
+  const latestNode = events.findLast(
+    (event) => event.type === "node_start",
+  )?.node;
   const final = events.findLast((event) => event.type === "final");
   const failed = events.some((event) => event.type === "error");
   const candidates = retrieved.map(
@@ -104,11 +110,12 @@ export function Intelligence() {
             <Database size={13} /> Document evidence{" "}
             <span>{candidates.length || "—"}</span>
           </div>
-          {typeof usedThreshold === "number" && Number.isFinite(usedThreshold) && (
-            <p className="muted">
-              Minimum relevance used: {Math.round(usedThreshold * 100)}%
-            </p>
-          )}
+          {typeof usedThreshold === "number" &&
+            Number.isFinite(usedThreshold) && (
+              <p className="muted">
+                Minimum relevance used: {Math.round(usedThreshold * 100)}%
+              </p>
+            )}
           {!candidates.length && (
             <div className="panel-empty">
               Relevant passages from your knowledge will appear here.
@@ -152,9 +159,12 @@ export function Intelligence() {
                   <Database size={13} />
                 )}
                 {decision.route === "web"
-                  ? "Web fallback"
-                  : "Document evidence"}
+                  ? decision.verdict === "AMBIGUOUS"
+                    ? "Partial evidence · augmenting with web"
+                    : "Insufficient documents · web correction"
+                  : "Documents sufficient"}
               </span>
+              {decision.verdict && <small>CRAG: {decision.verdict}</small>}
               <p>{decision.reason}</p>
               {decision.missing_information && (
                 <small>Missing: {decision.missing_information}</small>
@@ -167,6 +177,17 @@ export function Intelligence() {
             </div>
           )}
         </div>
+        {correction && (
+          <div className="panel-section">
+            <div className="eyebrow">
+              <Activity size={13} /> CORRECTIVE ACTION
+            </div>
+            <p>
+              {correction.action?.replaceAll("_", " ") ?? "Reviewing options"}
+            </p>
+            {correction.reason && <small>{correction.reason}</small>}
+          </div>
+        )}
         {rewritten && (
           <div className="panel-section">
             <div className="eyebrow">

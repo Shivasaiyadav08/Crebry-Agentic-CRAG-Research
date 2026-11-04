@@ -1,4 +1,4 @@
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -28,6 +28,22 @@ class EvidenceAssessment(BaseModel):
     missing_information: str
 
 
+class EvidenceSelection(BaseModel):
+    """Select only exact source-derived sentence IDs; never generate new evidence."""
+
+    keep_ids: list[str] = Field(description="Identifiers of passages relevant to the question")
+
+
+class CorrectionPlan(BaseModel):
+    """Allowed adaptive actions after a failed answer validation."""
+
+    action: Literal["regenerate", "retrieve", "web_search", "stop"]
+    reason: str = Field(description="Why this action addresses the validation feedback")
+    query: str = Field(
+        default="", max_length=500, description="Focused query for a retrieval or search action"
+    )
+
+
 class RewrittenQuery(BaseModel):
     query: str = Field(
         min_length=1, max_length=500, description="Standalone web search query preserving user intent"
@@ -37,6 +53,9 @@ class RewrittenQuery(BaseModel):
 class AnswerValidation(BaseModel):
     grounded: bool = Field(description="Every factual claim is supported by its cited evidence")
     reason: str
+    needs_more_evidence: bool = Field(
+        default=False, description="True when available sources cannot support the required claims"
+    )
 
 
 class GraphState(TypedDict, total=False):
@@ -56,3 +75,11 @@ class GraphState(TypedDict, total=False):
     feedback: str
     warnings: list[str]
     model_plan: dict
+    crag_verdict: Literal["CORRECT", "AMBIGUOUS", "INCORRECT"]
+    refined_sources: list[dict]
+    retrieval_rounds: int
+    retrieval_query: str
+    web_attempts: int
+    correction_action: str
+    correction_query: str
+    needs_more_evidence: bool

@@ -69,32 +69,23 @@ export function Workflow({ compact = false }: { compact?: boolean }) {
   const { nodes, edges } = useMemo(() => {
     const starts = events.filter((event) => event.type === "node_start");
     const latestStart = starts.at(-1)?.node;
-    const lastEnd = events
-      .filter((event) => event.type === "node_end")
-      .at(-1)?.node;
+    const lastEnd = events.findLast((event) => event.type === "node_end")?.node;
     const failed = events.some((event) => event.type === "error");
     const active =
       streaming && latestStart !== lastEnd ? latestStart : undefined;
     const documentRoute =
-      events.find((event) => event.type === "decision")?.route === "documents";
-    const displayOrder = [
-      "retrieve",
-      "grade",
-      "assess",
-      "rewrite",
-      "finalize",
-      "validate",
-      "generate",
-      "web_search",
-    ];
-    const nodes: AgentNode[] = workflowSteps.map((step) => {
-      const displayIndex = displayOrder.indexOf(step.id);
-      const ended = events
-        .filter((event) => event.type === "node_end" && event.node === step.id)
-        .at(-1);
+      events.findLast((event) => event.type === "decision")?.verdict ===
+      "CORRECT";
+    const webUsed = starts.some((event) => event.node === "web_search");
+    const nodes: AgentNode[] = workflowSteps.map((step, displayIndex) => {
+      const ended = events.findLast(
+        (event) => event.type === "node_end" && event.node === step.id,
+      );
       const began = starts.some((event) => event.node === step.id);
       const skipped =
-        documentRoute && ["rewrite", "web_search"].includes(step.id);
+        documentRoute &&
+        !webUsed &&
+        ["rewrite", "web_search"].includes(step.id);
       const status =
         active === step.id
           ? "running"
@@ -110,7 +101,7 @@ export function Workflow({ compact = false }: { compact?: boolean }) {
         type: "agent",
         position: {
           x: (displayIndex % 4) * 290,
-          y: displayIndex < 4 ? 0 : 210,
+          y: Math.floor(displayIndex / 4) * 210,
         },
         data: {
           title: step.title,
@@ -140,9 +131,9 @@ export function Workflow({ compact = false }: { compact?: boolean }) {
     return { nodes, edges };
   }, [events, streaming, compact]);
   const step = workflowSteps.find((item) => item.id === selected);
-  const execution = events
-    .filter((event) => event.type === "node_end" && event.node === selected)
-    .at(-1);
+  const execution = events.findLast(
+    (event) => event.type === "node_end" && event.node === selected,
+  );
 
   return (
     <div className={`workflow ${compact ? "compact" : ""}`}>
@@ -246,7 +237,7 @@ export function Workflow({ compact = false }: { compact?: boolean }) {
               </dl>
               <div className="code-file">
                 backend/app/agents/
-                {step.id === "assess" ? "graph.py + nodes.py" : "nodes.py"}
+                {step.file}
               </div>
               <pre>
                 <code>{step.code}</code>
