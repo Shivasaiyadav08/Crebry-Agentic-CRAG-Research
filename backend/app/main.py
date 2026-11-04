@@ -72,6 +72,11 @@ app.add_middleware(
 app.include_router(router)
 
 
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
+
 @app.middleware("http")
 async def protect_local_writes(request: Request, call_next):
     """Reject writes from unrelated browser origins; this is not user authentication."""
