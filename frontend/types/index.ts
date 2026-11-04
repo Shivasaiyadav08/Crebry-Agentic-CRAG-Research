@@ -76,6 +76,8 @@ export type WorkflowEvent = {
   source?: Source;
   query?: string;
   route?: string;
+  verdict?: "CORRECT" | "AMBIGUOUS" | "INCORRECT";
+  action?: "regenerate" | "retrieve" | "web_search" | "stop";
   reason?: string;
   missing_information?: string;
   text?: string;

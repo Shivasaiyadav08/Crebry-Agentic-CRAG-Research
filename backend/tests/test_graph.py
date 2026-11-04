@@ -3,9 +3,16 @@ import pytest
 
 from langchain_core.messages import AIMessageChunk
 
-from app.agents.graph import build_graph, evidence_route, validation_route
+from app.agents.graph import build_graph, evidence_route, validation_route, correction_route, next_node
 from app.agents.nodes import citation_errors
-from app.agents.state import AnswerValidation, EvidenceAssessment, RelevanceBatch, RewrittenQuery
+from app.agents.state import (
+    AnswerValidation,
+    CorrectionPlan,
+    EvidenceAssessment,
+    EvidenceSelection,
+    RelevanceBatch,
+    RewrittenQuery,
+)
 
 SETTINGS = {
     "model": "test/model",
@@ -31,6 +38,10 @@ def mock_ai(monkeypatch, *, score=0.9, sufficient=True, valid=True, answer=None)
                 reason="Evidence coverage checked",
                 missing_information="" if sufficient else "Recent data",
             )
+        if schema is EvidenceSelection:
+            return schema(keep_ids=[item["id"] for item in data["sentences"]])
+        if schema is CorrectionPlan:
+            return schema(action="regenerate", reason="Improve citation grounding")
         if schema is RewrittenQuery:
             return schema(query="astronomy stars current research")
         if schema is AnswerValidation:
@@ -109,7 +120,7 @@ async def test_sufficient_document_route_and_real_tokens(vectors, monkeypatch):
     mock_ai(monkeypatch)
     events = await run_graph(vectors)
     names = [event["node"] for event in events if event["type"] == "node_start"]
-    assert names == ["retrieve", "grade", "assess", "generate", "validate", "finalize"]
+    assert names == ["retrieve", "grade", "assess", "refine", "generate", "validate", "finalize"]
     assert len([event for event in events if event["type"] == "token"]) == 2
     assert events[-1]["sources"][0]["id"] == "D1"
     assert events[-1]["valid"] is True
@@ -264,9 +275,17 @@ async def test_optional_validation_still_enforces_citations(vectors, monkeypatch
 
 
 def test_routing_and_citation_membership():
-    assert evidence_route({"assessment": {"sufficient": True}}) == "generate"
-    assert evidence_route({"assessment": {"sufficient": False}}) == "rewrite"
-    assert validation_route({"valid": False, "attempts": 1, "settings": {"max_retries": 1}}) == "generate"
+    assert evidence_route({"crag_verdict": "CORRECT"}) == "refine"
+    assert evidence_route({"crag_verdict": "AMBIGUOUS"}) == "rewrite"
+    assert evidence_route({"crag_verdict": "INCORRECT"}) == "rewrite"
+    assert (
+        validation_route({"valid": False, "attempts": 1, "settings": {"max_retries": 1}}) == "plan_correction"
+    )
+    assert correction_route({"correction_action": "retrieve"}) == "retrieve"
+    assert correction_route({"correction_action": "web_search"}) == "rewrite"
+    assert correction_route({"correction_action": "stop"}) == "finalize"
+    assert next_node("refine", {}) == "generate"
+    assert next_node("plan_correction", {"correction_action": "regenerate"}) == "generate"
     assert validation_route({"valid": False, "attempts": 2, "settings": {"max_retries": 1}}) == "finalize"
     assert citation_errors("Facts [D1] and [W1]", [{"id": "D1"}, {"id": "W1"}]) == []
     assert citation_errors("Facts [D2]", [{"id": "D1"}])
@@ -278,7 +297,16 @@ async def test_grouped_web_citations_publish_all_sources_without_regenerating(ve
     mock_ai(monkeypatch, answer="Astronomy studies stars [W1, W2].")
 
     async def search(query):
-        return [{"id": f"W{i}", "kind": "web", "name": "Web report", "url": f"https://example.org/{i}", "text": "Astronomy studies stars"} for i in (1, 2)]
+        return [
+            {
+                "id": f"W{i}",
+                "kind": "web",
+                "name": "Web report",
+                "url": f"https://example.org/{i}",
+                "text": "Astronomy studies stars",
+            }
+            for i in (1, 2)
+        ]
 
     class Model:
         async def astream(self, messages):
@@ -293,7 +321,9 @@ async def test_grouped_web_citations_publish_all_sources_without_regenerating(ve
     assert events[-1]["valid"]
     assert events[-1]["answer"] == "Astronomy studies stars [W1, W2]."
     assert {source["id"] for source in events[-1]["sources"]} == {"W1", "W2"}
-    assert len([event for event in events if event["type"] == "node_start" and event["node"] == "generate"]) == 1
+    assert (
+        len([event for event in events if event["type"] == "node_start" and event["node"] == "generate"]) == 1
+    )
 
 
 async def test_relevance_threshold_boundary(vectors, monkeypatch):

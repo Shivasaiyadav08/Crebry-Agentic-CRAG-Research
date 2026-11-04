@@ -1,14 +1,10 @@
-### Crebry 2.0 — Agentic AI Research System
-
-Designed and implemented a goal-driven AI research architecture using **LangGraph, Google Gemini, RAG, and Tavily**, featuring dynamic tool selection, iterative research planning, evidence evaluation, answer validation, and bounded autonomous execution.
-
-**Tech Stack:** Python, FastAPI, LangGraph, Gemini, Tavily, Next.js, TypeScript.
-
-**GitHub:** https://github.com/Shivasaiyadav08/Crebry-ResearchAgent/tree/crebry-2.0-autonomous-agent
-
 # Crebry — AI Research Workspace
 
-Crebry turns uploaded documents and web evidence into cited research answers. Its corrective retrieval-augmented generation (CRAG) workflow retrieves passages, grades relevance, checks evidence coverage, searches the web when needed, and validates the answer before saving it.
+Crebry is a source-grounded research workspace. Its LangGraph Corrective RAG (CRAG)
+workflow grades uploaded-document evidence, decides whether to use, augment, or replace
+it, refines source-backed passages, and validates cited answers. A bounded AI planner
+can choose a corrective tool after validation fails. This is **constrained, adaptive
+agentic behavior**, not unrestricted autonomous browsing or guaranteed factual accuracy.
 
 Built with **Next.js, FastAPI, LangGraph, Gemini, Tavily, Clerk, and Supabase**. SQLite and Chroma remain available for local development.
 
@@ -17,7 +13,9 @@ Built with **Next.js, FastAPI, LangGraph, Gemini, Tavily, Clerk, and Supabase**.
 - Account-owned workspaces, document libraries, saved conversations, and research traces.
 - PDF, DOCX, TXT, and Markdown ingestion; scanned PDF OCR; duplicate detection; preview, original download, and staged reindexing.
 - Semantic retrieval with a configurable relevance threshold and batched chunk grading.
-- Conditional Tavily web search when documents lack sufficient evidence.
+- CRAG CORRECT / AMBIGUOUS / INCORRECT evidence routing and source-preserving sentence refinement.
+- Conditional Tavily web search to augment incomplete evidence or replace irrelevant document results.
+- Budgeted agent-selected recovery: regenerate, re-retrieve, web search, or abstain.
 - Streamed Markdown drafts, clickable document/web citations, source inspection, copy, and latest-question regeneration.
 - Citation membership checks and semantic grounding validation before publication.
 - Verified free-tier Gemini routing with task-specific health, cooldowns, bounded retries, quota reservations, and persistent conversation preferences.
@@ -48,23 +46,42 @@ flowchart LR
 
 The browser calls the same-origin `/api/backend` proxy. Next.js forwards a Clerk session token; FastAPI verifies the identity and checks ownership before accessing workspace resources. Gemini, Tavily, and Supabase backend credentials remain on the server.
 
+### Reading the code
+
+- `backend/app/api/routes.py` handles HTTP requests and workspace access.
+- `backend/app/agents/graph.py` defines the workflow routes shared with checkpoint recovery.
+- `backend/app/agents/nodes.py` implements each research step; `state.py` defines its data.
+- `backend/app/services/ai.py` connects to Gemini and Tavily; `routing.py` handles model fallback.
+- `backend/app/services/jobs.py` saves progress, resumes jobs, and streams events.
+- `frontend/lib/research-stream.ts` receives events; `stores/research.ts` updates the UI state.
+- `frontend/components/` renders chat, documents, evidence, and the workflow described in `frontend/lib/workflow.ts`.
+
 ### Research workflow
 
 ```mermaid
 flowchart TD
-    Q[Question + conversation context] --> R[Retrieve document chunks]
-    R --> G[Grade relevance in one structured batch]
-    G --> A[Assess evidence sufficiency]
-    A -->|Sufficient| Generate[Generate cited draft]
-    A -->|Insufficient| Rewrite[Prepare web query]
-    Rewrite --> Search[Tavily search]
-    Search --> Generate
-    Generate --> Validate[Citation + grounding checks]
-    Validate -->|Correction within retry limit| Generate
-    Validate -->|Accepted or retries exhausted| Final[Save final answer or safe abstention]
+    Q[Research question] --> R[Retrieve workspace chunks]
+    R --> G[Grade relevance]
+    G --> A[Evaluate evidence coverage]
+    A -->|CORRECT| F[Refine source-backed passages]
+    A -->|AMBIGUOUS: keep relevant documents| Rewrite[Focus web query]
+    A -->|INCORRECT: no accepted documents| Rewrite
+    Rewrite --> Search[Tavily web correction]
+    Search --> F
+    F --> Generate[Generate streamed, cited draft]
+    Generate --> Validate[Citation and semantic grounding checks]
+    Validate -->|Valid| Final[Publish cited answer]
+    Validate -->|Invalid, budget remains| Plan[AI chooses allowed corrective action]
+    Plan -->|Regenerate| Generate
+    Plan -->|Focused re-retrieval, at most once| R
+    Plan -->|Web correction if not already searched| Rewrite
+    Plan -->|Stop| Abstain[Safe abstention]
+    Validate -->|Budget exhausted| Abstain
 ```
 
-Only accepted document chunks and returned web evidence reach generation. `D` citation IDs represent uploaded documents; `W` IDs represent web sources. Standalone topic changes can search the original question without an extra rewrite call. Drafts are provisional, and correction drafts do not clear the visible answer while validation runs.
+The evaluator distinguishes **CORRECT** (strongly relevant, sufficiently complete evidence), **AMBIGUOUS** (useful but incomplete or only moderately relevant; augment with web results), and **INCORRECT** (no trustworthy document evidence; use web results if available). CRAG uses a 0.3 lower and 0.7 upper relevance band alongside the user-configurable acceptance cutoff. Refinement selects original source sentences by IDs; it never fabricates compressed evidence. If selection fails, already graded evidence is retained. `D` citation IDs refer to uploaded documents, and `W` IDs refer to web results. Each source retains original metadata, while answer generation and semantic validation use the refined evidence. Standalone topic changes do not inherit unrelated chat history.
+
+After validation fails, an AI planner chooses among **regenerate, retrieve, web_search, or stop**, subject to remaining draft retries and one additional document retrieval / one web-search attempt. It cannot choose arbitrary tools, write files, or browse without configured Tavily access. If citation/grounding validation remains unsuccessful, the workflow abstains. The UI displays provisional streaming drafts until validated; a failed correction replaces the draft rather than publishing unsupported claims.
 
 Completed nodes are checkpointed. Reconnection reads saved events rather than creating a second question. A crash can repeat the in-flight node; a provider stream cannot resume at its exact interrupted token.
 
@@ -208,7 +225,7 @@ Follow [Supabase deployment configuration](docs/supabase-deployment.md) for the 
 - Shared routing state records task-specific failures, latency, cooldowns, quota reservations, and last-successful conversation preferences. Distinct eligible models are considered before bounded retries, within operation/research deadlines.
 - Manual selection and automatic fallback are separate controls; actual model use is visible. Excluded Gemini 3.6/3.8 Flash families cannot re-enter through cached plans.
 - Published free pricing does not disable billing. Use a Google project with billing disabled and confirm that configuration before production startup. Internal budgets must reflect actual project limits; key replacement does not reset quota.
-- Citation checks confirm source membership; semantic validation reduces unsupported claims but cannot guarantee factual accuracy. Source instructions remain untrusted. Raw Markdown HTML and generated image tags are not rendered.
+- Citation checks confirm membership in the evidence supplied to generation; semantic validation reduces unsupported claims but cannot guarantee factual accuracy. Source instructions remain untrusted. Raw Markdown HTML and generated image tags are not rendered.
 - Request budgets, bounded job/model concurrency, idempotency keys, leases, and checkpoints limit duplicate work and provider load.
 - Supabase mode refuses silent local fallback for user data. Original files remain private; only scratch space may be temporary.
 
@@ -242,7 +259,7 @@ Coverage includes fallback/exhaustion, ownership, retrieval, grounding, job reco
 
 ## Future improvements
 
-Performance changes should preserve the existing retrieve → grade → assess → search → generate → validate flow:
+Performance changes should preserve the retrieve → grade → assess → [optional search] → refine → generate → validate → [optional correction plan] flow:
 
 1. **Measure bottlenecks:** record per-node latency, first-token time, total time, retry frequency, and provider error rates.
 2. **Reuse connections and clients:** pool HTTP/model clients with credential-aware invalidation and safe shutdown.
