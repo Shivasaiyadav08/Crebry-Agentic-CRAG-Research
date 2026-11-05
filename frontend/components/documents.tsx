@@ -187,6 +187,7 @@ export function Documents() {
     setProgress(null);
     if (fileInput.current) fileInput.current.value = "";
     await reload();
+    await refreshWorkspaceCounts();
   }
   async function act(
     document: DocumentRecord,
@@ -200,11 +201,13 @@ export function Documents() {
       if (action === "reindex") {
         await api(path + "/reindex", { method: "POST" });
         await reload();
+        await refreshWorkspaceCounts();
       }
       if (action === "delete") {
         await api(path, { method: "DELETE" });
         setDeleting(null);
         await reload();
+        await refreshWorkspaceCounts();
       }
     } catch (error) {
       setError(
