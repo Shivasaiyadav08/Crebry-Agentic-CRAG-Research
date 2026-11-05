@@ -23,7 +23,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { DocumentRecord } from "@/types";
+import type { DocumentRecord, Workspace } from "@/types";
 
 type UploadResult = {
   document?: DocumentRecord;
@@ -78,6 +78,19 @@ export function Documents() {
     },
     [],
   );
+
+  async function refreshWorkspaceCounts() {
+    try {
+      const workspaces = await api<Workspace[]>("/workspaces");
+      const state = useResearch.getState();
+
+      if (state.workspaceId === workspaceId) {
+        state.update({ workspaces });
+      }
+    } catch (error) {
+      console.error("Failed to refresh workspace counts:", error);
+    }
+  }
 
   async function upload(files: FileList | File[]) {
     if (uploading || streaming) return;
